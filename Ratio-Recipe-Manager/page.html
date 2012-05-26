@@ -1,0 +1,184 @@
+<!DOCTYPE html>;
+
+<html lang="en">
+<head>
+<title>Ratio Recipe Manager</title>
+
+<script type="text/javascript" src="../lib/knockout-2.1.0.js"></script>
+<script type="text/javascript" src="../lib/jquery-1.7.1.min.js"></script>
+<link href="../lib/bootstrap/css/bootstrap.css" rel="stylesheet">
+
+
+<style>  
+div {
+    border: 1px solid orange;
+    background-color: none;
+}
+.isBase {
+    background-color: red;
+    border: 2px solid black;
+}
+.calcError {
+    color: red;
+    font-style: italic;
+}
+</style>
+
+<script>
+    var Type = {
+        FLOUR : "flour",
+        WATER : "water",
+        SALT : "salt",
+        YEAST : "yeast"
+    }
+
+    function Ingredient(params){
+        this.name = params.name;
+        this.id = params.id;
+        this.percents = params.percents;
+        this.actual = ko.observable("");
+        this.calc = ko.observable("");
+    }
+    Ingredient.prototype.getPercent = function(type){
+        return this.percents[type] || 0;
+    }
+
+    function Aspect(params) {
+        this.name = params.name;
+        this.type = params.type;
+        this.showActual = ko.observable(true);
+        this.isBase = ko.observable(false);
+        this.ratioNum = params.ratioNum;
+        this.calc = ko.observable("");
+
+        /** sums the actuals for every ingredient's % */
+        this.actual = ko.computed(
+            function() {
+                var result = 0;
+                list = params.ingredients();
+                for(var i = 0; i < list.length; i++){
+                    var ing = list[i];
+                    var percent = ing.getPercent(this.type)
+                    if(percent == 0)
+                        continue
+                    var act = ing.actual();
+                    if(act.length > 0 && !isNaN(Number(act))) {
+                        result += Number(act) * percent;
+                    }
+                }
+                return result;
+            }, this);
+        this.ideal = ko.observable("");
+
+    }
+    Aspect.prototype.toggleShowActual = function(vm, e){
+        if(e.target instanceof HTMLInputElement)
+            return true;
+        vm.showActual(!vm.showActual());
+        return true;
+    }
+    Aspect.prototype.hasSomeValue = function(){
+        if(this.showActual() && this.actual() > 0)
+            return true;
+        else if(!this.showActual() && this.ideal() > 0)
+            return true;
+        return false;
+    }
+    Aspect.prototype.getValueToUse = function() {
+        if(this.showActual())
+            return this.actual();
+        return this.ideal();
+    }
+    function setUp(){
+        console.log("Shit just got real");
+        vm = new RatioVm();
+        ko.applyBindings(vm, $("[data-reb='ratioBox']")[0])
+    }
+    function RatioVm() {
+        this.ingredients = ko.observableArray([
+            new Ingredient({name: "Water", percents: {water : 1}}),
+            new Ingredient({name: "Flour", percents: {flour : 1}}),
+            new Ingredient({name: "Avocado", percents: {water : .3}}),
+            new Ingredient({name: "Mango", percents: {sugar : .137, water : .835, fat: .0038, protein: .0082}}),
+            new Ingredient({name: "Banana", percents: {sugar : .123, water : .837, fat: .0033, protein: .0109}})
+            ]);
+        this.aspects = ko.observableArray([
+            new Aspect({name : "Flour", type: Type.FLOUR, ratioNum: 1000, ingredients : this.ingredients}),
+            new Aspect({name : "Water", type: Type.WATER, ratioNum: 600, ingredients : this.ingredients}),
+            new Aspect({name : "Salt", type: Type.SALT, ratioNum: 20, ingredients : this.ingredients}),
+            new Aspect({name : "Yeast", type: Type.YEAST, ratioNum: 30, ingredients : this.ingredients})
+            ])
+        this.watchForChanges = ko.computed(
+            function() {
+                var result = "";
+                var asp = this.aspects()
+                for(var i = 0; i < asp.length; ++i){
+                    result += asp[i].showActual()+":"+asp[i].actual()+", "+asp[i].ideal()+"\n";
+                }
+                return result;
+            }, this)
+        this.watchForChanges.subscribe(this.handleChange.bind(this));
+    }
+    RatioVm.prototype.handleChange = function (newVal) {
+            // OMG! do NOT change the actual values anywhere or the ideal value of an aspect!!
+            console.log(" --- time to re-run calculations");
+            var base = null;
+            var aspects = this.aspects();
+            for(var i = 0; i < aspects.length; ++i){
+                var aspect = aspects[i];
+                aspect.calc("");
+                aspect.isBase(false);
+                if(base == null && aspect.hasSomeValue()){  //don't forget ideals!
+                    base = aspect;
+                    aspect.isBase(true);
+                }
+            }
+            if(base == null)
+                return;
+
+            for(var i = 0; i < aspects.length; ++i){
+                var aspect = aspects[i];
+                aspect.calc(Math.round(aspect.ratioNum * base.getValueToUse() / base.ratioNum)); // handle ideal!!
+                
+                // don't forget to show them where they fucked up if the ratio by manually entering stuff?
+                // don't forget to dump values into a MISC line? 
+            }
+
+        }
+</script>
+</head>
+<body onload="setUp()">
+    <div class="row">
+        <div class="span4">Ratios</div>
+        <div class="span1">.Bread</div>
+    </div>
+    <div class="container">
+    <div data-reb='ratioBox'>
+        <div class="row">
+            <div class="span2">Name</div> <div class="span2">Actual/Ideal</div><div class="span2">Computed</div>
+        </div>
+        <div data-bind="foreach: aspects">
+            <div class="row" data-bind="css: {isBase : isBase}">
+                <div class="span2" data-bind="text: name"></div> 
+                <div class="span2" data-bind="text: actual, visible: showActual, click: toggleShowActual"></div> 
+                <div class="span2" data-bind="visible: !showActual(), click: toggleShowActual">
+                    <input class="span1" type="number" data-bind="value: ideal">
+                </div> 
+                <div class="span2" data-bind="text: calc, css: {calcError : hasSomeValue() && calc() != getValueToUse()}"></div>
+            </div>
+        </div>
+        <div data-bind="foreach: ingredients">
+            <div class="row">
+                <div class="span2" data-bind="text: name"></div>
+                <div class="span2"> 
+                    <input class="span2" type="text" data-bind="value: actual">
+                </div>
+                <div class="span2" data-bind="visible: calc() > 0">
+                    (<span data-bind="text: calc"></span>)
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
