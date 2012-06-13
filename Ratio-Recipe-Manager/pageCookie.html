@@ -1,0 +1,474 @@
+<!DOCTYPE html>;
+
+<html lang="en">
+<head>
+<title>Ratio Recipe Manager</title>
+
+<script type="text/javascript" src="../lib/knockout-2.1.0.js"></script>
+<script type="text/javascript" src="../lib/jquery-1.7.1.min.js"></script>
+<script type="text/javascript" src="../lib/popup.js"></script><!-- from : http://nicolashoening.de/?twocents&nr=8 -->
+
+<link href="../lib/bootstrap/css/bootstrap.css" rel="stylesheet">
+
+
+<style>  
+div {
+    background-color: none;
+}
+#helpTexts {
+    height: 150px;
+    overflow-y: auto;
+}
+.recipeHistoryBox{
+    background-color:green;
+    float: right;
+    width: 200px;
+    height: 400px;
+    position: relative;
+}
+.recipeHistoryBox pre {
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 300px;
+
+}
+.recipeHistoryBox textarea {
+    width: 170px;
+}
+.isBase {
+    background-color: red;
+    border: 2px solid black;
+}
+.selectedRecipe { 
+    font-weight: bold;
+    border: 2px solid green;
+}
+.calcError {
+    color: red;
+    font-style: italic;
+}
+.isIncluded {
+    color: white;
+}
+.isLacking {
+    font-style: italic;
+}
+#pup {
+  position:absolute;
+  z-index:200; /* aaaalways on top*/
+  padding: 3px;
+  margin-left: 10px;
+  margin-top: 5px;
+  width: 125px;
+  border: 1px solid black;
+  background-color: #777;
+  color: white;
+  font-size: 0.95em;
+}
+#percentsTable{
+    width: 125px;
+    border: 2px solid black;
+    float: left;
+}
+#percentsTable tr td {
+    padding-left: 10px;
+}
+
+#percentsTable tr:first-child {
+    font-style: italic;
+    font-size: 20px;
+}
+#percentsTable tr td:first-child {
+    font-weight: bold;
+    padding-left: 5px;
+    width: 75px;
+    border-right-style: solid;
+    border-right-color: #555;
+    border-right-width: 1px;
+
+    border-bottom-style: solid;
+    border-bottom-color: #555;
+    border-bottom-width: 1px;
+}
+
+#aspect-table {
+    background: white;
+    top: 100px;
+    position: absolute;
+}
+#aspect-table td {
+    width: 75px;
+}
+#recipeBoxController {
+    width:200px;
+    position: absolute;
+}
+#ingredient-table {
+    background: white;
+    left: 270px;
+    position: relative;
+}
+#ingredient-table tr {
+    background: grey;
+}
+#ingredient-table tr:nth-child(even) {
+    background: red;
+}
+#ingredient-table tr td {
+    padding: 10px 10px 0px 0px;
+}
+#ingredient-table tr td:first-child {
+    text-align: right;
+    font-weight: bold;
+    padding-left: 10px;
+    padding-right: 5px;
+}
+
+
+</style>
+
+<script>
+    function roundToDisplayablePercision(num){
+        return Math.round(num*100)/100;
+    }
+    var globalVM = ko.observable(null);
+    var Type = {
+        FLOUR : "flour",
+        WATER : "water",
+        SALT : "salt",
+        FAT: "fat",
+        SUGAR: "sugar",
+        YEAST : "yeast"
+    }
+
+    function Ingredient(params){
+        this.name = params.name;
+        this.id = params.id;
+        this.percents = params.percents;
+        this.actual = ko.observable("");
+        this.calc = ko.observable("");
+        this.manuallyInclude = ko.observable(false);
+        this.toggleIncluded = function(vm){
+            vm.manuallyInclude(!vm.manuallyInclude());
+        }
+        this.included = ko.computed(function() {
+            return this.manuallyInclude() || this.actual() > 0 || this.calc() > 0;
+        }, this);
+    }
+    Ingredient.prototype.getPercent = function(type){
+        return this.percents[type] || 0;
+    }
+
+    function Aspect(params) {
+        this.name = params.name;
+        this.type = params.type;
+        this.showActual = ko.observable(true);
+        this.isBase = ko.observable(false);
+        this.isLacking = ko.observable(false);
+        this.ratioNum = params.ratioNum;
+        this.calc = ko.observable("");
+
+        /** sums the actuals for every ingredient's % */
+        this.actual = ko.computed(
+            function() {
+                var result = 0;
+                if(globalVM() == null)
+                    return 0;
+                list = globalVM().ingredients();
+                for(var i = 0; i < list.length; i++){
+                    var ing = list[i];
+                    var percent = ing.getPercent(this.type)
+                    if(percent == 0)
+                        continue
+                    var act = ing.actual();
+                    if(act.length > 0 && !isNaN(Number(act))) {
+                        result += roundToDisplayablePercision(Number(act) * percent);
+                    }
+                }
+                return result;
+            }, this);
+        this.ideal = ko.observable("");
+
+    }
+    Aspect.prototype.toggleShowActual = function(vm, e){
+        if(e.target instanceof HTMLInputElement)
+            return true;
+        vm.showActual(!vm.showActual());
+        return true;
+    }
+    Aspect.prototype.hasSomeValue = function(){
+        if(this.showActual() && this.actual() > 0)
+            return true;
+        else if(!this.showActual() && this.ideal() > 0)
+            return true;
+        return false;
+    }
+    Aspect.prototype.getValueToUse = function() {
+        if(this.showActual())
+            return this.actual();
+        return this.ideal();
+    }
+    function setUp(){
+        console.log("Shit just got real");
+        globalVM(new RatioVm());
+        ko.applyBindings(globalVM(), $("body")[0])
+    }
+    function RatioVm() {
+        this.popupIngredient = ko.observable(null)
+        this.recipe = ko.observable('')
+        this.ingredients = ko.observableArray([
+            new Ingredient({name: "Water", percents: {water : 1}}),
+            new Ingredient({name: "Flour", percents: {flour : 1}}),
+            new Ingredient({name: "Yeast", percents: {yeast : 1}}),
+            new Ingredient({name: "Salt", percents: {salt : 1}}),
+            new Ingredient({name: "Honey", percents: {water : .17, sugar: .8212}}),
+            new Ingredient({name: "Strawberry", percents: {water : .91, sugar: .8212}}),
+            new Ingredient({name: "Avocado", percents: {water : .7323, fat: .1466}}),
+            new Ingredient({name: "Egg", percents: {protein : 0.125, fat: 0.106, water: .75}}),
+            new Ingredient({name: "Butter", percents: {water: 0.15, protein : 0.01, fat: 0.81}}),
+            new Ingredient({name: "Mango", percents: {sugar : .137, water : .835, fat: .0038, protein: .0082}}),
+            new Ingredient({name: "Banana", percents: {sugar : .123, water : .837, fat: .0033, protein: .0109}})
+            ]);
+        this.aspects = ko.observableArray()
+        this.watchForChanges = ko.computed(
+            function() {
+                var result = "";
+                var asp = this.aspects()
+                for(var i = 0; i < asp.length; ++i){
+                    result += asp[i].showActual()+":"+asp[i].actual()+", "+asp[i].ideal()+"\n";
+                }
+                var ing = this.ingredients()
+                for(var i = 0; i < ing.length; ++i){
+                    result += ing[i].manuallyInclude()+"\n";
+                }
+                return result;
+            }, this)
+        this.watchForChanges.subscribe(this.handleChange.bind(this));
+        this.setRecipe('bread');
+        var startingHistory = (localStorage.rawRecipeInfo == undefined) ? "Good luck" : localStorage.rawRecipeInfo;
+
+        this.recipeHistory = ko.observable(startingHistory);
+        this.notes = ko.observable("");
+        this.saveRecipe = function (vm){
+            console.log("Saving shit now...");
+            var d = new Date();
+            var content = d.getDate() +"/"+(d.getMonth()+1)+"/"+d.getFullYear()+" --- "+vm.recipe()+"\n";
+            var ing = vm.ingredients();
+            for(var i = 0; i < ing.length; ++i){
+                var curIng = ing[i];
+                if(curIng.actual() > 0){
+                    content = content + curIng.name + " : "+curIng.actual()+"g\n";
+                }else if(curIng.calc() > 0){
+                    content = content + curIng.name + " : "+curIng.calc()+"g (calc)\n";
+                }
+            }
+            if(vm.notes().length > 0){
+                content = content + "--\nNotes : "+vm.notes()+"\n";
+            }
+            vm.recipeHistory(content +"\n\n"+vm.recipeHistory());
+            localStorage.rawRecipeInfo = vm.recipeHistory();
+        }
+    }
+    INGREDIENTS = new Array();
+    COOKIE_RATIO = [
+            new Aspect({name : "Flour", type: Type.FLOUR, ratioNum: 300}),
+            new Aspect({name : "Fat", type: Type.FAT, ratioNum: 200}),
+            new Aspect({name : "Sugar", type: Type.SUGAR, ratioNum: 100})
+    ];
+    BREAD_RATIO = [
+            new Aspect({name : "Flour", type: Type.FLOUR, ratioNum: 1000}),
+            new Aspect({name : "Water", type: Type.WATER, ratioNum: 600}),
+            new Aspect({name : "Salt", type: Type.SALT, ratioNum: 20}),
+            new Aspect({name : "Yeast", type: Type.YEAST, ratioNum: 30})
+    ];
+    RatioVm.prototype.setRecipe = function(recipeName){
+        this.aspects.removeAll()
+        if(this.recipe() == recipeName){
+            return false;
+        } else if(recipeName == 'bread') {
+            for(i in BREAD_RATIO) {
+                this.aspects.push(BREAD_RATIO[i]);
+            }
+        } else if(recipeName == 'cookie') {
+            for(i in COOKIE_RATIO) {
+                this.aspects.push(COOKIE_RATIO[i]) 
+            }
+        }
+        this.recipe(recipeName);
+        return false
+    }
+    RatioVm.prototype.setPopup = function (vm, e){
+        globalVM().popupIngredient(vm);
+        var x = function(event){
+            popup($('#hidden-table').html(), 125);
+        }(e);
+    }
+    RatioVm.prototype.handleChange = function (newVal) {
+            // OMG! do NOT change the actual values anywhere or the ideal value of an aspect!!
+            //console.log(" --- time to re-run calculations");
+            var base = null;
+            var aspects = this.aspects();
+            var ingredients = this.ingredients();
+            for(var i = 0; i < aspects.length; ++i){
+                var aspect = aspects[i];
+                aspect.calc("");
+                aspect.isBase(false);
+                aspect.isLacking(false);
+                if(base == null && aspect.hasSomeValue()){  //don't forget ideals!
+                    base = aspect;
+                    aspect.isBase(true);
+                }
+            }
+            if(base == null)
+                return;
+
+            var tempAspects = {};
+
+            for(var i = 0; i < aspects.length; ++i){
+                var aspect = aspects[i];
+                aspect.calc(Math.round(aspect.ratioNum * base.getValueToUse() / base.ratioNum)); // handle ideal!!
+                if(aspect == base)
+                    tempAspects[aspect.type] = base.getValueToUse();
+                else
+                    tempAspects[aspect.type] = aspect.calc();
+                // don't forget to show them where they fucked up if the ratio by manually entering stuff?
+                // don't forget to dump values into a MISC line? 
+            }
+            for(var i in tempAspects){
+                //console.log(" TEMP : "+i+" : "+tempAspects[i]);
+            }
+            // First pass, remove what we already got
+            for(var i = 0; i < ingredients.length; ++i){
+                var ing = ingredients[i];
+                ing.calc("");
+                if(Number(ing.actual()) > 0){
+                    for(var j in ing.percents){
+                        if(tempAspects[j]){
+                            //tempAspects[j] = tempAspects[j] - ing.actual()*ing.percents[j]; 
+                            //console.log("Math! for "+j+" : "+tempAspects[j]+" - "+ing.actual()+"*"+ing.percents[j]);
+                            tempAspects[j] = roundToDisplayablePercision(Math.max(0,tempAspects[j] - ing.actual()*ing.percents[j]));
+                            //console.log(tempAspects[j]);
+                        }
+                    }
+                }
+            }
+            // Second pass, patch up the holes
+            for(var i = 0; i < ingredients.length; ++i){
+                var ing = ingredients[i];
+                if(Number(ing.actual()) > 0 || !ing.manuallyInclude()){
+                    continue;
+                }
+                for(var j in ing.percents){
+                    if(tempAspects[j]){
+                        //console.log("Looking at the "+j+" inside "+ing.name+" : we want "+tempAspects[j]+" of it and our % is "+ing.percents[j]);
+                        ing.calc(roundToDisplayablePercision(tempAspects[j] / ing.percents[j]));
+                        tempAspects[j] = 0;
+                        //TODO : calc how much we take out of tempAspects for the other percents of this ingredient!!
+                        break;
+                    }
+                }
+
+            }
+
+            // note if anything is lacking
+
+            for(var i = 0; i < aspects.length; ++i){
+                var aspect = aspects[i];
+                console.log(aspect.type+" is @ "+tempAspects[aspect.type]);
+                if(tempAspects[aspect.type] > 0){
+                    aspect.isLacking(true);
+                    console.log(" !!! IS LACKING "+aspect.name);
+                }
+            }
+
+        }
+</script>
+</head>
+<body onload="setUp()">
+<div class="container" style="padding:10px;">
+    <div class="recipeHistoryBox">
+        <div data-bind="click: saveRecipe">Save</div>
+        <textarea data-bind="value: notes"></textarea>
+        <pre data-bind="text: recipeHistory" ></pre>
+    </div>
+    <table  id="recipeBoxController">
+        <tr>
+        <td class="span4">Recipe Ratios : </td>
+            <td class="span1" data-bind="  css: {selectedRecipe: recipe() == 'bread'},  
+                                            click: function(vm){vm.setRecipe('bread');}">Bread</td>
+            <td class="span1" data-bind="  css: {selectedRecipe: recipe() == 'cookie'}, 
+                                            click: function(vm){vm.setRecipe('cookie');}">Cookie</td>
+        </tr>                        
+    </table>
+    <table id="aspect-table">
+        <tr><td>Component</td><td>Actual/Ideal</td><td>Computed</td></tr>
+        <tbody data-bind="foreach: aspects">
+        <tr data-bind="css: {isBase: isBase, isLacking: isLacking}">
+            <td data-bind="text: name, click: toggleShowActual"></td>
+            <td>
+                <div data-bind="text: actual, visible: showActual, click: toggleShowActual"></div> 
+                <div data-bind="visible: !showActual(), click: toggleShowActual">
+                    <input class="span1" type="text" data-bind="value: ideal, valueUpdate: 'keyup'">
+                </div> 
+            </td>
+            <td data-bind="text: calc, css: {calcError : hasSomeValue() && calc() != getValueToUse()}"></td>
+        </tr>
+        </tbody>
+    </table>
+
+    <table id="ingredient-table">
+        <tbody  data-bind="foreach: ingredients">
+        <tr data-bind="css: {isIncluded: included}">
+            <td data-bind=" text: name, 
+                            event: { mouseover: $parent.setPopup}, 
+                            click: toggleIncluded"></td>
+            <td> 
+                <input type="text" data-bind="valueUpdate: 'keyup', value: actual"> g
+            </td>
+            <td class="span2" data-bind="visible: calc() > 0">
+                (<span data-bind="text: calc"></span>)
+            </td>
+        </tr>
+        </tbody>
+    </table>
+
+    <div id="hidden-table" style="display:none;">
+        <table id="percentsTable" data-bind="if: popupIngredient">
+            <tr><td colspan=2 data-bind="text: popupIngredient().name"></td></tr>
+            <tr data-bind="if: popupIngredient().percents.fat">
+              <td>Fat </td><td data-bind="text: Math.round(popupIngredient().percents.fat*100)+'%'"></td>
+            </tr>
+            <tr data-bind="if: popupIngredient().percents.flour">
+              <td>Flour </td><td data-bind="text: Math.round(popupIngredient().percents.flour*100)+'%'"></td>
+            </tr>
+            <tr data-bind="if: popupIngredient().percents.protein">
+              <td>Protein </td><td data-bind="text: Math.round(popupIngredient().percents.protein*100)+'%'"></td>
+            </tr>    
+            <tr data-bind="if: popupIngredient().percents.salt">
+              <td>Salt </td><td data-bind="text: Math.round(popupIngredient().percents.salt*100)+'%'"></td>
+            </tr>    
+            <tr data-bind="if: popupIngredient().percents.sugar">
+              <td>Sugar </td><td data-bind="text: Math.round(popupIngredient().percents.sugar*100)+'%'"></td>
+            </tr>
+            <tr data-bind="if: popupIngredient().percents.water">
+              <td>Water </td><td data-bind="text: Math.round(popupIngredient().percents.water*100)+'%'"></td>
+            </tr>  
+            <tr data-bind="if: popupIngredient().percents.yeast">
+              <td>Yeast </td><td data-bind="text: Math.round(popupIngredient().percents.yeast*100)+'%'"></td>
+            </tr>        
+        </table>
+    </div>
+    <div id="helpTexts">
+        At some point I'll write up how to use this in a much better fashion...<br><br>
+        You can select between bread and cookie ratio cooking.  I only really recommend the bread one. <br><br>
+        Enter amounts in the ingredients list.  Click the ingredient name to indicate it's being used in the recipe, even if you haven't measured any of it yet.  Name will turn white.  This will make sure it's recorded in the history and can help with auto-computing values.<br><br>
+        Italic Component names means some or all of that required amount is not represented in the ingredients list<br><br>
+        Red Component line means it's the primary ingredient I'm basing the entire ratio around<br><br>
+        Red number in the Component Computed column means that the listed ingredients do not match the computed value<br><br>
+        Click Save to save your ingredents list.  You can add notes in the text field below.  I will endevor to make this suck a lot less in the future<br><br>
+        If you want to split a component across multiple ingredients but want some computational help, you can click the component name and manually enter the expected, final total value.  Click the name again to exit that mode
+
+    </div>
+</div>
+</body>
+</html>
